@@ -1,0 +1,35 @@
+# Python cache and environments
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Data / artifacts
+*.npy
+*.npz
+*.joblib
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.zip
+*.tar
+*.gz
+
+# Logs
+*.log
+
+# Project outputs
+advanced_out/
+hybrid_out/
+hybrid_final_out/
