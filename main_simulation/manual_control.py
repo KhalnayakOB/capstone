@@ -1,164 +1,118 @@
-import time
-from typing import List
-import numpy as np
 import pybullet as p
-import pybullet_data
+import time
+
+from envs.sim_env_city_v2 import UAVCityEnvV2
+from envs.multi_uav_controller import MultiUAVController
 
 
-class UAVCityEnvV2:
-    """
-    Stable cinematic city environment (FIXED VERSION)
+SPEED = 15
+VERT_SPEED = 12
 
-    ✔ Safe single connection
-    ✔ Large visible drone
-    ✔ Default working camera
-    ✔ Stable stepping
-    ✔ Compatible with manual_control
-    """
 
-    def __init__(self, gui: bool = True, dt: float = 1.0 / 240.0):
+def main():
 
-        # ---------- SAFE CONNECTION ----------
-        if p.isConnected():
-            p.disconnect()
+    env = UAVCityEnvV2(gui=True)
+    if not p.isConnected():
+        p.connect(p.GUI)
+    controller = MultiUAVController(env, env.drones)
 
-        self.client_id = p.connect(p.GUI if gui else p.DIRECT)
-        self.dt = dt
+    drone = controller.drone_ids[0]
 
-        p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.setGravity(0, 0, -9.81)
-        p.setRealTimeSimulation(0)
+    env.set_camera_view_third_person()
 
-        self._build_scene()
-        self.set_camera_view_third_person()
+    print("""
+Controls:
 
-    # --------------------------------------------------
-    # SCENE BUILD
-    # --------------------------------------------------
-    def _build_scene(self):
+U/J : Forward / Back
+H/K : Left / Right
+↑/↓ : Up / Down
 
-        p.resetSimulation()
+1 : Third person camera
+2 : Top view
+3 : Drone follow camera
 
-        # Ground
-        self.plane_id = p.loadURDF("plane.urdf", [0, 0, -0.25])
+P : Toggle autopilot
+Z : Show / Hide RRT path
 
-        # Big rooftop pad
-        self.pad_half_x = 25
-        self.pad_half_y = 25
+Q : Quit
+""")
 
-        col = p.createCollisionShape(
-            p.GEOM_BOX,
-            halfExtents=[self.pad_half_x, self.pad_half_y, 0.1]
-        )
+    while True:
 
-        vis = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[self.pad_half_x, self.pad_half_y, 0.1],
-            rgbaColor=[0.85, 0.85, 0.9, 1]
-        )
+        keys = p.getKeyboardEvents()
 
-        self.pad_id = p.createMultiBody(0, col, vis, [0, 0, 0])
+        vx = vy = vz = 0
 
-        # Buildings
-        self.building_ids = []
-        rng = np.random.default_rng(2)
+        # -------------------------
+        # CAMERA
+        # -------------------------
 
-        for _ in range(40):
-            x = rng.uniform(-22, 22)
-            y = rng.uniform(-22, 22)
-            h = rng.uniform(2, 6)
+        if ord('1') in keys and keys[ord('1')] & p.KEY_WAS_TRIGGERED:
+            env.set_camera_view_third_person()
 
-            col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[1, 1, h])
-            vis = p.createVisualShape(
-                p.GEOM_BOX,
-                halfExtents=[1, 1, h],
-                rgbaColor=[0.6, 0.65, 0.75, 1]
-            )
+        if ord('2') in keys and keys[ord('2')] & p.KEY_WAS_TRIGGERED:
+            env.set_camera_view_top()
 
-            bid = p.createMultiBody(0, col, vis, [x, y, h])
-            self.building_ids.append(bid)
+        if ord('3') in keys and keys[ord('3')] & p.KEY_WAS_TRIGGERED:
 
-        # ---------- DRONE (BIG & VISIBLE) ----------
-        self.start_pos = np.array([-20, 0, 3])
+            pos, orn = p.getBasePositionAndOrientation(drone)
+            yaw = p.getEulerFromQuaternion(orn)[2]
+            yaw_deg = yaw * 57.3
 
-        drone_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.9, 0.9, 0.25])
-        drone_vis = p.createVisualShape(
-            p.GEOM_BOX,
-            halfExtents=[0.9, 0.9, 0.25],
-            rgbaColor=[0.05, 0.3, 1.0, 1]  # bright blue
-        )
+            env.set_camera_view_game(pos, yaw_deg)
 
-        self.drone_id = p.createMultiBody(
-            baseMass=1.0,
-            baseCollisionShapeIndex=drone_col,
-            baseVisualShapeIndex=drone_vis,
-            basePosition=self.start_pos.tolist()
-        )
+        # -------------------------
+        # RRT VISUALIZATION
+        # -------------------------
 
-    # --------------------------------------------------
-    # CAMERA
-    # --------------------------------------------------
-    def set_camera_view_third_person(self):
-        p.resetDebugVisualizerCamera(
-            cameraDistance=35,
-            cameraYaw=45,
-            cameraPitch=-30,
-            cameraTargetPosition=[0, 0, 2]
-        )
+        if ord('z') in keys and keys[ord('z')] & p.KEY_WAS_TRIGGERED:
+            controller.toggle_rrt_visualization()
 
-    def set_camera_follow(self):
-        pos, _ = p.getBasePositionAndOrientation(self.drone_id)
-        p.resetDebugVisualizerCamera(
-            cameraDistance=10,
-            cameraYaw=40,
-            cameraPitch=-25,
-            cameraTargetPosition=pos
-        )
+        # -------------------------
+        # MANUAL CONTROL
+        # -------------------------
 
-    def set_camera_top(self):
-        pos, _ = p.getBasePositionAndOrientation(self.drone_id)
-        p.resetDebugVisualizerCamera(
-            cameraDistance=60,
-            cameraYaw=0,
-            cameraPitch=-89,
-            cameraTargetPosition=pos
-        )
+        if not controller.autopilot:
 
-    # --------------------------------------------------
-    # STATE
-    # --------------------------------------------------
-    def get_drone_state(self):
-        pos, orn = p.getBasePositionAndOrientation(self.drone_id)
-        vel, ang = p.getBaseVelocity(self.drone_id)
-        return {
-            "pos": np.array(pos),
-            "orn": np.array(orn),
-            "vel": np.array(vel),
-            "ang_vel": np.array(ang),
-        }
+            if ord('u') in keys:
+                vy = SPEED
 
-    # --------------------------------------------------
-    # STEP
-    # --------------------------------------------------
-    def step(self):
+            if ord('j') in keys:
+                vy = -SPEED
+
+            if ord('h') in keys:
+                vx = -SPEED
+
+            if ord('k') in keys:
+                vx = SPEED
+
+            if p.B3G_UP_ARROW in keys:
+                vz = VERT_SPEED
+
+            if p.B3G_DOWN_ARROW in keys:
+                vz = -VERT_SPEED
+
+            p.resetBaseVelocity(drone, linearVelocity=[vx, vy, vz])
+
+        # -------------------------
+        # AUTOPILOT
+        # -------------------------
+
+        if ord('p') in keys and keys[ord('p')] & p.KEY_WAS_TRIGGERED:
+            controller.toggle_autopilot()
+
+        controller.update_autopilot()
+
+        # -------------------------
+        # EXIT
+        # -------------------------
+
+        if ord('q') in keys:
+            break
+
         p.stepSimulation()
-        self.set_camera_follow()
-        time.sleep(self.dt)
+        time.sleep(1 / 240)
 
-    # --------------------------------------------------
-    # RESET
-    # --------------------------------------------------
-    def reset_scene(self):
-        p.resetBasePositionAndOrientation(
-            self.drone_id,
-            self.start_pos.tolist(),
-            [0, 0, 0, 1]
-        )
-        p.resetBaseVelocity(self.drone_id, [0, 0, 0], [0, 0, 0])
 
-    # --------------------------------------------------
-    # CLOSE
-    # --------------------------------------------------
-    def close(self):
-        if p.isConnected():
-            p.disconnect()
+if __name__ == "__main__":
+    main()
